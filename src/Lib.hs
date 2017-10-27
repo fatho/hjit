@@ -21,7 +21,7 @@ import HJit.Memory
 
 import HJit.CodeGen.AMD64
 
-type TestFunction = IO CInt
+type TestFunction = IO CLLong
 foreign import ccall "dynamic"
   mkFun :: FunPtr TestFunction -> TestFunction
 
@@ -38,19 +38,23 @@ someFunc = do
   print memx
   -- TODO: generate code here
   protectRegion (accessRead <> accessWrite) memx
-  let fun = castPtrToFunPtr ptr :: FunPtr (IO CInt)
+  let fun = castPtrToFunPtr ptr :: FunPtr TestFunction
   x <- mkFun fun
-  print x
+  printf "%016x" (fromIntegral x :: Word64)
   -- TODO: execute code here
   freeRegion memx
 
 
 testAsm :: Int -> AMD64 ()
 testAsm base = mdo
-  mov r15 (42 :: Word64)
+  mov r15 (0xdeadbeefdeafacdc :: Word64)
   mov rax (fromIntegral $ labelPosition skip + base :: Word64)
   jmpReg rax
   mov r15 (2 :: Word64)
   skip <- here
   mov rax r15
+  mov eax (0xabbafefe :: Word32)
+  mov ax (0xabcd :: Word16)
+  mov al (0x34 :: Word8)
+  mov ah (0x12 :: Word8)
   retn

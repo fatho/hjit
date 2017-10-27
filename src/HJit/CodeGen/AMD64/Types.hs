@@ -41,35 +41,86 @@ class ToAMD64 a where
   -- | Generate the opcode for the given @a@.
   opcode :: a -> AMD64 ()
 
+-- | Throw an invalid instruction error.
+invalidInstruction :: Text -> AMD64 ()
+invalidInstruction = throwError . InvalidInstruction
+
+-- | Special case of an invalid instruction error, signifying that AH, CH, DH
+-- and BH registers cannot be encoded in operations that require a REX prefix.
+cannotEncodeWithRex :: AMD64 ()
+cannotEncodeWithRex = invalidInstruction "Cannot encode AH, CH, DH or BH register in an instruction requiring a REX prefix."
+
 -- * Operands
 
 -- | A general purpose register annotated with its size
-data GPReg (s :: IntegralSize) = GPReg {-# UNPACK #-} !IntegralSize {-# UNPACK #-} !Word8
+data Reg (s :: IntegralType) = Reg
+  { regIndex :: {-# UNPACK #-} !Word8
+    -- ^ The internal index of that register
+  , regHigh8 :: {-# UNPACK #-} !Bool
+    -- ^ Determines whether this register accesses the high 8 bit of the lower 16 bit of the (AH, CH, DH, BH).
+  }
+
+-- | Control register
+newtype CR = CR Word8
+
+-- | Debug register
+newtype DR = DR Word8
+
+type S8 = 'Integral8
+type S16 = 'Integral16
+type S32 = 'Integral32
+type S64 = 'Integral64
 
 -- | The data types that are use on assembly level
-data IntegralSize
-  = Size8
+data IntegralType
+  = Integral8
   -- ^ 8 bit word
-  | Size16
+  | Integral16
   -- ^ 16 bit word
-  | Size32
+  | Integral32
   -- ^ 32 bit word
-  | Size64
+  | Integral64
+  -- ^ 64 bit word
 
+data WordSize (i :: IntegralType) where
+  WordSize8 :: WordSize S8
+  WordSize16 :: WordSize S16
+  WordSize32 :: WordSize S32
+  WordSize64 :: WordSize S64
+
+class ReifySize (s :: IntegralType) where
+  reifySize :: WordSize s
+
+instance ReifySize S8 where
+  reifySize = WordSize8
+
+instance ReifySize S16 where
+  reifySize = WordSize16
+
+instance ReifySize S32 where
+  reifySize = WordSize32
+
+instance ReifySize S64 where
+  reifySize = WordSize64
 
 -- * Instruction Encoding
 
--- | REX prefix byte. This type encodes the invariant that the highest 4 bits are always 0x4.
+-- | Optional REX prefix byte. This type encodes the invariant that it is either 0 or the highest 4 bits are always 0x4.
 newtype REX = REX { getRex :: Word8 }
 
 instance Monoid REX where
-  mempty = REX 0x40
+  mempty = REX 0x00
   mappend (REX a) (REX b) = REX (a .|. b)
 
 instance ToAMD64 REX where
   opcode = word8LE . getRex
 
-rexW, rexR, rexX, rexB :: REX
+-- | Should the REX prefix be present. If there should be no REX prefix, this is encoded with 0.
+isRexPresent :: REX -> Bool
+isRexPresent (REX r) = r /= 0
+
+rex, rexW, rexR, rexX, rexB :: REX
+rex = REX 0x40
 rexW = REX 0x48
 rexR = REX 0x44
 rexX = REX 0x42

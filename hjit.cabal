@@ -9,7 +9,7 @@ bug-reports:         https://github.com/fatho/hjit/issues
 license:             BSD3
 license-file:        LICENSE
 author:              Fabian Thorand
-maintainer:          f.thorand@gmail.com
+maintainer:          f.thorand+haskell@gmail.com
 copyright:           2017 Fabian Thorand
 category:            Compiler
 build-type:          Simple
@@ -38,6 +38,7 @@ library
       HJit.CodeGen.AMD64.Registers
       HJit.IR
       HJit.Memory.POSIX
+      HJit.Util
       Paths_hjit
   build-depends:
       base >=4.7 && <5
