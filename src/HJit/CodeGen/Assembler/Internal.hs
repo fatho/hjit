@@ -72,4 +72,3 @@ word64LE x = do
 
 here :: Assembler e Label
 here = Label <$> use codeSize
-

@@ -8,6 +8,7 @@
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE RecursiveDo                #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
 module HJit.CodeGen.AMD64
@@ -26,8 +27,10 @@ module HJit.CodeGen.AMD64
   , here
   ) where
 
+import           Control.Lens
 import           Control.Monad
 import           Data.Bits
+import           Data.Int
 import           Data.Monoid
 import           Data.Word
 
@@ -43,16 +46,16 @@ import           HJit.Util                    (enableIf)
 class Movable dst src where
   mov :: dst -> src -> AMD64 ()
 
-instance Movable (Reg S64) Word64 where
+instance Movable (Reg W64) Word64 where
   mov reg val = movRegImm 0xB8 rexW reg (word64LE val)
 
-instance Movable (Reg S32) Word32 where
+instance Movable (Reg W32) Word32 where
   mov reg val = movRegImm 0xB8 mempty reg (word32LE val)
 
-instance Movable (Reg S16) Word16 where
+instance Movable (Reg W16) Word16 where
   mov reg val = overrideOperandSize >> movRegImm 0xB8 mempty reg (word16LE val)
 
-instance Movable (Reg S8) Word8 where
+instance Movable (Reg W8) Word8 where
   mov reg val = movRegImm 0xB0 (rex `enableIf` regNeedsLow8REX reg) reg (word8LE val)
 
 
@@ -69,55 +72,85 @@ movRegImm op rexBase reg@(Reg idx _) operand = do
   -- set REX.B, if we use reg >= 8
   let rexByte = rexBase <> (rexB `enableIf` regIndexNeedsREX reg)
   when (isRexPresent rexByte) $
-    opcode rexByte
+    emit rexByte
   -- the lower 3 bits of the register are directly encoded in the immediate MOV opcode
   word8LE $ op + (idx .&. 7)
   operand
 
-instance Movable (Reg S64) (Reg S64) where
-  mov dst src = movRegReg 0x89 rexW dst src
-
-instance Movable (Reg S32) (Reg S32) where
-  mov dst src = movRegReg 0x89 rexW dst src
-
-instance Movable (Reg S16) (Reg S16) where
-  mov dst src = overrideOperandSize >> movRegReg 0x89 mempty dst src
-
-instance Movable (Reg S8) (Reg S8) where
+instance WordSized s => Movable (Reg s) (Reg s) where
   mov dst src
-    | any regProhibitsREX [src, dst] && any regNeedsREX [src, dst] = cannotEncodeWithRex
-    | otherwise = movRegReg 0x88 (rex `enableIf` any regNeedsLow8REX [src, dst]) dst src
-    where
-      regNeedsREX r = regNeedsLow8REX r || regIndexNeedsREX r
+    | wordSize dst == W8 = emitOpModRM (OpCodeByte 0x88) (OpReg dst) src
+    | otherwise          = emitOpModRM (OpCodeByte 0x89) (OpReg dst) src
 
--- | Encode a move from a register to a register of the same size.
--- TODO: generalize for arbitrary Reg RM moves
-movRegReg :: Word8 -- ^ move opcode (decides rm -> reg vs reg -> rm)
-          -> REX   -- ^ REX prefix, if necessary
-          -> Reg s -- ^ destination register
-          -> Reg s -- ^ source register
-          -> AMD64 ()
-movRegReg op rexBase (Reg dst _) (Reg src _) = do
-  -- R, if we use src >= 8
-  -- B, if we use dst >= 8
-  let rexByte = rexBase <> (rexB `enableIf` (testBit dst 3)) <> (rexR `enableIf` (testBit src 3))
-  when (isRexPresent rexByte) $
-    opcode rexByte
-  word8LE op
-  -- Mod 11, REG src, RM dst
-  -- the lower 3 bits of the register are directly encoded in the 0xB8+r MOV opcode
-  opcode $ mod11 <> modReg (src .&. 0x7) <> modRM (dst .&. 0x7)
+instance WordSized s => Movable (Ind W64) (Reg s) where
+  mov dst src
+    | wordSize src == W8 = emitOpModRM (OpCodeByte 0x88) (OpInd dst) src
+    | otherwise          = emitOpModRM (OpCodeByte 0x89) (OpInd dst) src
+
+instance WordSized s => Movable (Reg s) (Ind W64) where
+  mov dst src
+    | wordSize dst == W8 = emitOpModRM (OpCodeByte 0x8A) (OpInd src) dst
+    | otherwise          = emitOpModRM (OpCodeByte 0x8B) (OpInd src) dst
+
+-- | Emit an opcode whose operands are encoded using a ModRM byte.
+emitOpModRM :: WordSized s => OpCode -> OperandRM s -> Reg s -> AMD64 ()
+emitOpModRM opcode oprm opreg = do
+  let size = wordSize opreg
+      -- for 64-bit operands, REX.W must be set
+      rexSize = rexW `enableIf` (size == W64)
+      -- REX needed for encoding the R/M operand
+      rexRM = case oprm of
+        OpReg rmreg -> rexB `enableIf` regIndexNeedsREX rmreg
+        OpInd ind   -> indREX ind
+      -- REX needed for encoding the Reg operand
+      rexReg = rexR `enableIf` regIndexNeedsREX opreg
+      -- REX needed for encoding 8 bit special registers
+      rmNeedsLow8REX = anyOf _OpReg (regNeedsLow8REX . unsafeCastReg) oprm
+      rex8 = rex `enableIf` (size == W8 && (regNeedsLow8REX (unsafeCastReg opreg) || rmNeedsLow8REX))
+      -- check for collisions with AH, CH, DH or BH
+      mustNotHaveREX = size == W8 && (regProhibitsREX (unsafeCastReg opreg)
+                                      || anyOf _OpReg (regProhibitsREX . unsafeCastReg) oprm)
+
+      -- combine REX
+      rexByte = rexSize <> rexRM <> rexReg <> rex8
+
+  when (mustNotHaveREX && isRexPresent rexByte) $ cannotEncodeWithRex
+
+  -- for 16-bit operands, REX.W must not be set, and a 0x66 size override must be present
+  when (size == W16) $ overrideOperandSize
+  when (isRexPresent rexByte) $ emit rexByte
+  emit opcode
+
+  -- encode operands
+  let modOpReg = modReg $ regIndex opreg
+  case oprm of
+    OpReg rmreg -> emit $ mod11 <> modOpReg <> modRM (regIndex rmreg)
+    OpInd ind -> case ind of
+      IndB base@(Reg breg _)
+        -- R/M 0x4 in ModRM byte indicates SIB addressing, therefore this register needs to be encoded differently
+        | breg .&. 0x4 == 0x4 -> do
+            emit $ mod00 <> modOpReg <> modRM 0x4 -- use SIB addressing
+            emit $ sibBase breg <> sibIndex 0x4 -- SIB [base]
+        -- R/M 0x5 in ModRM byte indicates RIP-relative addressing, base 0x5 in SIP denotes [disp32]
+        | breg .&. 0x5 == 0x5 -> do
+            emit $ mod01 <> modOpReg <> modRM 0x4 -- use SIB addressing
+            emit $ sibBase breg <> sibIndex 0x4 -- SIB [base + 0x00]
+            word8LE 0
+        | otherwise -> emit $ mod00 <> modOpReg <> modRM breg
+
+  return ()
+
 
 -- * Stack manipulation
 
 -- * Control flow
 
-jmpReg :: Reg S64 -> AMD64 ()
+jmpReg :: Reg W64 -> AMD64 ()
 jmpReg (Reg dst _) = do
   when (dst `testBit` 3) $
-    opcode rexB
+    emit rexB
   word8LE 0xFF
-  opcode $ mod11 <> modReg 0x4 <> modReg (dst .&. 0x7)
+  emit $ mod11 <> modReg 0x4 <> modRM (dst .&. 0x7)
 
 -- | return near (pop RIP from stack)
 retn :: AMD64 ()
@@ -139,16 +172,3 @@ overrideAddressSize = word8LE 0x67
 
 -- * Helper functions
 
--- | Check whether the register index needs a REX prefix for encoding.
-regIndexNeedsREX :: Reg s -> Bool
-regIndexNeedsREX (Reg reg _) = testBit reg 3
-
--- | Check whether a REX prefix is needed for selecting the correct low 8 bit register.
-regNeedsLow8REX :: Reg S8 -> Bool
-regNeedsLow8REX (Reg idx False) = idx >= 4 && idx <= 7
-regNeedsLow8REX _ = False
-
--- | Check whether a REX prefix prevents encoding the given register.
-regProhibitsREX :: Reg S8 -> Bool
-regProhibitsREX (Reg idx True) = idx >= 4 && idx <= 7
-regProhibitsREX _ = False

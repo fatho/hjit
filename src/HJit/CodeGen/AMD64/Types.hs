@@ -20,12 +20,14 @@ import           Control.Monad.State.Strict
 import           Data.Bits                  (Bits (..))
 import qualified Data.ByteString.Builder    as BB
 import qualified Data.ByteString.Lazy       as BL
+import           Data.Int
 import           Data.Monoid                ((<>))
 import           Data.Text                  (Text)
 import           Data.Word                  (Word16, Word32, Word64, Word8)
 import           Foreign.Ptr                (IntPtr)
 
 import           HJit.CodeGen.Assembler
+import           HJit.Util                  (enableIf)
 
 -- | Defines the errors that can occur in the assembler
 data AMD64Error
@@ -38,8 +40,8 @@ type AMD64 = Assembler AMD64Error
 
 -- | Class of things that can be encoded into AMD64 assembly code.
 class ToAMD64 a where
-  -- | Generate the opcode for the given @a@.
-  opcode :: a -> AMD64 ()
+  -- | Generate the AMD64 byte representation for the given @a@.
+  emit :: a -> AMD64 ()
 
 -- | Throw an invalid instruction error.
 invalidInstruction :: Text -> AMD64 ()
@@ -53,12 +55,19 @@ cannotEncodeWithRex = invalidInstruction "Cannot encode AH, CH, DH or BH registe
 -- * Operands
 
 -- | A general purpose register annotated with its size
-data Reg (s :: IntegralType) = Reg
-  { regIndex :: {-# UNPACK #-} !Word8
+data Reg (s :: WordSize) = Reg
+  { regIndex :: !Word8
     -- ^ The internal index of that register
-  , regHigh8 :: {-# UNPACK #-} !Bool
+  , regHigh8 :: !Bool
     -- ^ Determines whether this register accesses the high 8 bit of the lower 16 bit of the (AH, CH, DH, BH).
   }
+
+-- | Unsafely assign a new size to the register type.
+unsafeCastReg :: Reg s1 -> Reg s2
+unsafeCastReg (Reg idx high8) = Reg idx high8
+
+-- | Instruction pointer register
+data IP (s :: WordSize) = IP
 
 -- | Control register
 newtype CR = CR Word8
@@ -66,44 +75,49 @@ newtype CR = CR Word8
 -- | Debug register
 newtype DR = DR Word8
 
-type S8 = 'Integral8
-type S16 = 'Integral16
-type S32 = 'Integral32
-type S64 = 'Integral64
+type W8 = 'W8
+type W16 = 'W16
+type W32 = 'W32
+type W64 = 'W64
 
--- | The data types that are use on assembly level
-data IntegralType
-  = Integral8
+-- | The word data types that are use on assembly level.
+data WordSize
+  = W8
   -- ^ 8 bit word
-  | Integral16
+  | W16
   -- ^ 16 bit word
-  | Integral32
+  | W32
   -- ^ 32 bit word
-  | Integral64
+  | W64
   -- ^ 64 bit word
+  deriving (Eq, Ord, Enum, Bounded, Show, Read)
 
-data WordSize (i :: IntegralType) where
-  WordSize8 :: WordSize S8
-  WordSize16 :: WordSize S16
-  WordSize32 :: WordSize S32
-  WordSize64 :: WordSize S64
+class WordSized (s :: WordSize) where
+  wordSize :: a s -> WordSize
 
-class ReifySize (s :: IntegralType) where
-  reifySize :: WordSize s
+instance WordSized W8 where
+  wordSize _ = W8
 
-instance ReifySize S8 where
-  reifySize = WordSize8
+instance WordSized W16 where
+  wordSize _ = W16
 
-instance ReifySize S16 where
-  reifySize = WordSize16
+instance WordSized W32 where
+  wordSize _ = W32
 
-instance ReifySize S32 where
-  reifySize = WordSize32
-
-instance ReifySize S64 where
-  reifySize = WordSize64
+instance WordSized W64 where
+  wordSize _ = W64
 
 -- * Instruction Encoding
+
+data OpCode
+  = OpCodeByte !Word8
+    -- ^ a single byte opcode
+  | OpCodeTwoByte !Word8
+    -- ^ a two byte opcode (prefixed with 0x0F)
+
+instance ToAMD64 OpCode where
+  emit (OpCodeByte b)    = word8LE b
+  emit (OpCodeTwoByte b) = word8LE 0x0F >> word8LE b
 
 -- | Optional REX prefix byte. This type encodes the invariant that it is either 0 or the highest 4 bits are always 0x4.
 newtype REX = REX { getRex :: Word8 }
@@ -113,7 +127,7 @@ instance Monoid REX where
   mappend (REX a) (REX b) = REX (a .|. b)
 
 instance ToAMD64 REX where
-  opcode = word8LE . getRex
+  emit = word8LE . getRex
 
 -- | Should the REX prefix be present. If there should be no REX prefix, this is encoded with 0.
 isRexPresent :: REX -> Bool
@@ -126,6 +140,20 @@ rexR = REX 0x44
 rexX = REX 0x42
 rexB = REX 0x41
 
+-- | Check whether the register index needs a REX prefix for encoding.
+regIndexNeedsREX :: Reg s -> Bool
+regIndexNeedsREX (Reg reg _) = testBit reg 3
+
+-- | Check whether a REX prefix is needed for selecting the correct low 8 bit register.
+regNeedsLow8REX :: Reg W8 -> Bool
+regNeedsLow8REX (Reg idx False) = idx >= 4 && idx <= 7
+regNeedsLow8REX _               = False
+
+-- | Check whether a REX prefix prevents encoding the given register.
+regProhibitsREX :: Reg W8 -> Bool
+regProhibitsREX (Reg idx True) = idx >= 4 && idx <= 7
+regProhibitsREX _              = False
+
 -- | ModRM byte.
 newtype ModRM = ModRM { getModRM :: Word8 }
 
@@ -134,7 +162,7 @@ instance Monoid ModRM where
   mappend (ModRM a) (ModRM b) = ModRM (a .|. b)
 
 instance ToAMD64 ModRM where
-  opcode = word8LE . getModRM
+  emit = word8LE . getModRM
 
 -- TODO: documentation about all these special bytes, see http://wiki.osdev.org/X86-64_Instruction_Encoding
 
@@ -156,6 +184,82 @@ modReg reg = ModRM $ (reg .&. 0x7) `shiftL` 3
 modRM :: Word8 -> ModRM
 modRM rm = ModRM $ rm .&. 0x7
 
+-- | The scale of an index as a power of two.
+type Scale = Word8
 
--- | TODO: SIB byte
-newtype SIB = SIB { getSIP :: Word8 }
+-- | SIB byte (scale, index, base)
+newtype SIB = SIB { getSIB :: Word8 }
+
+instance Monoid SIB where
+  mempty = SIB 0
+  mappend (SIB a) (SIB b) = SIB (a .|. b)
+
+instance ToAMD64 SIB where
+  emit = word8LE . getSIB
+
+sibScale :: Scale -> SIB
+sibScale s = SIB $ (s .&. 0x3) `shiftL` 6
+
+sibIndex :: Word8 -> SIB
+sibIndex i = SIB $ (i .&. 0x7) `shiftL` 3
+
+sibBase :: Word8 -> SIB
+sibBase b = SIB $ (b .&. 0x7)
+
+-- * Operands
+
+data Ind as
+  = IndB (Reg as)
+    -- ^ [base]
+  | IndBD8 (Reg as) Int8
+    -- ^ [base + disp8]
+  | IndBD32 (Reg as) Int32
+    -- ^ [base + disp32]
+  | IndBI (Reg as) (Reg as) Scale
+    -- ^ [base + index * 2^s]
+  | IndBID8 (Reg as) (Reg as) Scale Int8
+    -- ^ [base + index * 2^s + disp8]
+  | IndBID32 (Reg as) (Reg as) Scale Int32
+    -- ^ [base + index * 2^s + disp32]
+  | IndID8 (Reg as) Scale Int8
+    -- ^ [index * 2^s + disp8]
+  | IndID32 (Reg as) Scale Int32
+    -- ^ [index * 2^s + disp32]
+  | IndRIP Int32
+    -- ^ [RIP + disp32]
+  | IndD32 Int32
+    -- ^ [disp32]
+
+data OperandRM s = OpReg (Reg s) | OpInd (Ind W64)
+
+makePrisms ''OperandRM
+
+class IsOperandRM op where
+  toOperandRM :: op s -> OperandRM s
+
+instance IsOperandRM Reg where
+  toOperandRM = OpReg
+
+-- | Return the base register of the indirect addressing operand, if there is one.
+indBase :: Ind s -> Maybe (Reg s)
+indBase (IndB base)           = Just base
+indBase (IndBD8 base _)       = Just base
+indBase (IndBD32 base _)      = Just base
+indBase (IndBI base _ _)      = Just base
+indBase (IndBID8 base _ _ _)  = Just base
+indBase (IndBID32 base _ _ _) = Just base
+indBase _                     = Nothing
+
+-- | Return the index register of the indirect addressing operand, if there is one.
+indIndex :: Ind s -> Maybe (Reg s)
+indIndex (IndBI _ idx _)      = Just idx
+indIndex (IndBID8 _ idx _ _)  = Just idx
+indIndex (IndBID32 _ idx _ _) = Just idx
+indIndex (IndID8 idx _ _)     = Just idx
+indIndex (IndID32 idx _ _)    = Just idx
+indIndex _                    = Nothing
+
+-- | REX byte needed for encoding indirect addressing operand.
+indREX :: Ind s -> REX
+indREX ind = foldMap (enableIf rexB . regIndexNeedsREX) (indBase ind)
+  <>  foldMap (enableIf rexX . regIndexNeedsREX) (indIndex ind)
