@@ -7,6 +7,7 @@ module Lib
 
 import Data.Foldable
 import Data.Monoid
+import Data.Int
 import Data.Word
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
@@ -56,6 +57,8 @@ testAsm testFun base = mdo
   mov rax (fromIntegral $ labelPosition skip + base :: Word64)
   jmpReg rax
   mov (IndB rax) ah
+  mov (IndB rsp) rax
+  mov rax (-1 :: Int32)
   mov r15 (2 :: Word64)
   skip <- here
   mov rax r15

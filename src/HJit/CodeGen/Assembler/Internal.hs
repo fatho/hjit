@@ -11,7 +11,11 @@ module HJit.CodeGen.Assembler.Internal
   , code
   , assemble
     -- * Code generation primitives
-  , word8LE
+  , int8
+  , int16LE
+  , int32LE
+  , int64LE
+  , word8
   , word16LE
   , word32LE
   , word64LE
@@ -25,6 +29,7 @@ import           Control.Monad.Except
 import           Control.Monad.State.Strict
 import qualified Data.ByteString.Builder    as BB
 import qualified Data.ByteString.Lazy       as BL
+import           Data.Int                   (Int16, Int32, Int64, Int8)
 import           Data.Word                  (Word16, Word32, Word64, Word8)
 
 -- * Monad for encoding instructions
@@ -50,8 +55,28 @@ newtype Assembler e a = Assembler { runAssembler :: StateT AssemblerState (Eithe
 assemble :: Assembler e a -> Either e BL.ByteString
 assemble = fmap (BB.toLazyByteString . _code) . flip execStateT (AssemblerState 0 mempty) . runAssembler
 
-word8LE :: Word8 -> Assembler e ()
-word8LE x = do
+int8 :: Int8 -> Assembler e ()
+int8 x = do
+  code <>= BB.int8 x
+  codeSize += 1
+
+int16LE :: Int16 -> Assembler e ()
+int16LE x = do
+  code <>= BB.int16LE x
+  codeSize += 2
+
+int32LE :: Int32 -> Assembler e ()
+int32LE x = do
+  code <>= BB.int32LE x
+  codeSize += 4
+
+int64LE :: Int64 -> Assembler e ()
+int64LE x = do
+  code <>= BB.int64LE x
+  codeSize += 8
+
+word8 :: Word8 -> Assembler e ()
+word8 x = do
   code <>= BB.word8 x
   codeSize += 1
 

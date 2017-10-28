@@ -115,9 +115,14 @@ data OpCode
   | OpCodeTwoByte !Word8
     -- ^ a two byte opcode (prefixed with 0x0F)
 
+-- | Apply a transformation to the opcode byte.
+mapOpCode :: (Word8 -> Word8) -> OpCode -> OpCode
+mapOpCode f (OpCodeByte opcode) = OpCodeByte (f opcode)
+mapOpCode f (OpCodeTwoByte opcode) = OpCodeTwoByte (f opcode)
+
 instance ToAMD64 OpCode where
-  emit (OpCodeByte b)    = word8LE b
-  emit (OpCodeTwoByte b) = word8LE 0x0F >> word8LE b
+  emit (OpCodeByte b)    = word8 b
+  emit (OpCodeTwoByte b) = word8 0x0F >> word8 b
 
 -- | Optional REX prefix byte. This type encodes the invariant that it is either 0 or the highest 4 bits are always 0x4.
 newtype REX = REX { getRex :: Word8 }
@@ -127,14 +132,14 @@ instance Monoid REX where
   mappend (REX a) (REX b) = REX (a .|. b)
 
 instance ToAMD64 REX where
-  emit = word8LE . getRex
+  emit = word8 . getRex
 
 -- | Should the REX prefix be present. If there should be no REX prefix, this is encoded with 0.
 isRexPresent :: REX -> Bool
 isRexPresent (REX r) = r /= 0
 
-rex, rexW, rexR, rexX, rexB :: REX
-rex = REX 0x40
+rexNone, rexW, rexR, rexX, rexB :: REX
+rexNone = REX 0x40
 rexW = REX 0x48
 rexR = REX 0x44
 rexX = REX 0x42
@@ -162,7 +167,7 @@ instance Monoid ModRM where
   mappend (ModRM a) (ModRM b) = ModRM (a .|. b)
 
 instance ToAMD64 ModRM where
-  emit = word8LE . getModRM
+  emit = word8 . getModRM
 
 -- TODO: documentation about all these special bytes, see http://wiki.osdev.org/X86-64_Instruction_Encoding
 
@@ -195,7 +200,7 @@ instance Monoid SIB where
   mappend (SIB a) (SIB b) = SIB (a .|. b)
 
 instance ToAMD64 SIB where
-  emit = word8LE . getSIB
+  emit = word8 . getSIB
 
 sibScale :: Scale -> SIB
 sibScale s = SIB $ (s .&. 0x3) `shiftL` 6
@@ -221,12 +226,10 @@ data Ind as
     -- ^ [base + index * 2^s + disp8]
   | IndBID32 (Reg as) (Reg as) Scale Int32
     -- ^ [base + index * 2^s + disp32]
-  | IndID8 (Reg as) Scale Int8
-    -- ^ [index * 2^s + disp8]
   | IndID32 (Reg as) Scale Int32
     -- ^ [index * 2^s + disp32]
-  | IndRIP Int32
-    -- ^ [RIP + disp32]
+  | IndIP Int32
+    -- ^ [EIP/RIP + disp32]
   | IndD32 Int32
     -- ^ [disp32]
 
@@ -255,7 +258,6 @@ indIndex :: Ind s -> Maybe (Reg s)
 indIndex (IndBI _ idx _)      = Just idx
 indIndex (IndBID8 _ idx _ _)  = Just idx
 indIndex (IndBID32 _ idx _ _) = Just idx
-indIndex (IndID8 idx _ _)     = Just idx
 indIndex (IndID32 idx _ _)    = Just idx
 indIndex _                    = Nothing
 
