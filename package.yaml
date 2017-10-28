@@ -17,6 +17,10 @@ library:
   exposed-modules:
   - Lib
   - HJit.CodeGen.AMD64
+  - HJit.CodeGen.AMD64.ControlFlow
+  - HJit.CodeGen.AMD64.Moves
+  - HJit.CodeGen.AMD64.Prefixes
+  - HJit.CodeGen.AMD64.Primitives
   - HJit.CodeGen.AMD64.Types
   - HJit.CodeGen.Assembler
   - HJit.CodeGen.Assembler.Internal

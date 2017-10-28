@@ -40,13 +40,16 @@ foreign import ccall "sys/mman.h" mmap :: Ptr a -> CSize -> CInt -> CInt -> CInt
 foreign import ccall "sys/mman.h" munmap :: Ptr a -> CSize -> IO CInt
 foreign import ccall "sys/mman.h" mprotect :: Ptr a -> CSize -> CInt -> IO CInt
 
-pattern PROT_NONE = 0
+pattern PROT_EXEC :: CInt
 pattern PROT_EXEC = 1
+pattern PROT_WRITE :: CInt
 pattern PROT_WRITE = 2
+pattern PROT_READ :: CInt
 pattern PROT_READ = 4
 
-pattern MAP_SHARED = 1
+pattern MAP_PRIVATE :: CInt
 pattern MAP_PRIVATE = 2
+pattern MAP_ANONYMOUS :: CInt
 pattern MAP_ANONYMOUS = 0x20
 
 -- | Convert the 'Access' description into POSIX memory protection flags.

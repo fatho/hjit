@@ -54,10 +54,11 @@ someFunc = do
 testAsm :: FunPtr CallbackFun -> Int -> AMD64 ()
 testAsm testFun base = mdo
   mov r15 (0xdeadbeefdeafacdc :: Word64)
-  mov rax (fromIntegral $ labelPosition skip + base :: Word64)
-  jmpReg rax
-  mov (IndB rax) ah
-  mov (IndB rsp) rax
+  -- mov rax (fromIntegral $ labelPosition skip + base :: Word64)
+  -- jmp rax
+  jmpLabel8 skip
+  mov (bytePtr $ IndB rax) ah
+  mov (qwordPtr $ IndB rsp) rax
   mov rax (-1 :: Int32)
   mov r15 (2 :: Word64)
   skip <- here
@@ -69,6 +70,6 @@ testAsm testFun base = mdo
   mov rbx (fromIntegral $ ptrToIntPtr $ castFunPtrToPtr testFun :: Word64)
   -- tail call to Haskell function
   mov rdi (41 :: Word64)
-  jmpReg rbx
+  jmp rbx
 --  callReg
 --  retn

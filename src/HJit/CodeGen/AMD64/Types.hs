@@ -15,16 +15,11 @@ module HJit.CodeGen.AMD64.Types where
 
 import           Control.Lens
 import           Control.Monad.Except
-import           Control.Monad.Fix
-import           Control.Monad.State.Strict
 import           Data.Bits                  (Bits (..))
-import qualified Data.ByteString.Builder    as BB
-import qualified Data.ByteString.Lazy       as BL
 import           Data.Int
 import           Data.Monoid                ((<>))
 import           Data.Text                  (Text)
-import           Data.Word                  (Word16, Word32, Word64, Word8)
-import           Foreign.Ptr                (IntPtr)
+import           Data.Word                  (Word8)
 
 import           HJit.CodeGen.Assembler
 import           HJit.Util                  (enableIf)
@@ -117,7 +112,7 @@ data OpCode
 
 -- | Apply a transformation to the opcode byte.
 mapOpCode :: (Word8 -> Word8) -> OpCode -> OpCode
-mapOpCode f (OpCodeByte opcode) = OpCodeByte (f opcode)
+mapOpCode f (OpCodeByte opcode)    = OpCodeByte (f opcode)
 mapOpCode f (OpCodeTwoByte opcode) = OpCodeTwoByte (f opcode)
 
 instance ToAMD64 OpCode where
@@ -213,7 +208,7 @@ sibBase b = SIB $ (b .&. 0x7)
 
 -- * Operands
 
-data Ind as
+data Ind (as :: WordSize) (vs :: WordSize)
   = IndB (Reg as)
     -- ^ [base]
   | IndBD8 (Reg as) Int8
@@ -233,7 +228,7 @@ data Ind as
   | IndD32 Int32
     -- ^ [disp32]
 
-data OperandRM s = OpReg (Reg s) | OpInd (Ind W64)
+data OperandRM s = OpReg (Reg s) | OpInd (Ind W64 s)
 
 makePrisms ''OperandRM
 
@@ -244,7 +239,7 @@ instance IsOperandRM Reg where
   toOperandRM = OpReg
 
 -- | Return the base register of the indirect addressing operand, if there is one.
-indBase :: Ind s -> Maybe (Reg s)
+indBase :: Ind as vs -> Maybe (Reg as)
 indBase (IndB base)           = Just base
 indBase (IndBD8 base _)       = Just base
 indBase (IndBD32 base _)      = Just base
@@ -254,7 +249,7 @@ indBase (IndBID32 base _ _ _) = Just base
 indBase _                     = Nothing
 
 -- | Return the index register of the indirect addressing operand, if there is one.
-indIndex :: Ind s -> Maybe (Reg s)
+indIndex :: Ind as vs -> Maybe (Reg as)
 indIndex (IndBI _ idx _)      = Just idx
 indIndex (IndBID8 _ idx _ _)  = Just idx
 indIndex (IndBID32 _ idx _ _) = Just idx
@@ -262,6 +257,48 @@ indIndex (IndID32 idx _ _)    = Just idx
 indIndex _                    = Nothing
 
 -- | REX byte needed for encoding indirect addressing operand.
-indREX :: Ind s -> REX
+indREX :: Ind as vs -> REX
 indREX ind = foldMap (enableIf rexB . regIndexNeedsREX) (indBase ind)
   <>  foldMap (enableIf rexX . regIndexNeedsREX) (indIndex ind)
+
+
+-- * Building addresses
+
+-- data WithIndex before (as :: WordSize) = WithIndex (before as) (Reg as) Scale
+
+-- data WithOffset before (as :: WordSize)
+--   = WithOffset8 (before as) Int8
+--   | WithOffset32 (before as) Int32
+
+-- off32 :: before as -> Int32 -> WithOffset before as
+-- off32 x off = WithOffset32 x off
+
+-- off8 :: before as -> Int8 -> WithOffset before as
+-- off8 x off = WithOffset8 x off
+
+-- withIndex :: before as -> (Reg as, Scale) -> WithIndex before as
+-- withIndex x (reg, scale) = WithIndex x reg scale
+
+-- class ToAddress a where
+--   toAddress :: a -> Ind W64 s
+
+-- instance ToAddress (Reg W64) where
+--   toAddress = IndB
+
+-- instance ToAddress Int32 where
+--   toAddress = IndD32
+
+-- instance ToAddress (before W64) => ToAddress (WithOffset before W64) where
+--   toAddress (WithOffset8 x off) = case x of
+
+qwordPtr :: Ind W64 W64 -> Ind W64 W64
+qwordPtr = id
+
+dwordPtr :: Ind W64 W32 -> Ind W64 W32
+dwordPtr = id
+
+wordPtr :: Ind W64 W16 -> Ind W64 W16
+wordPtr = id
+
+bytePtr :: Ind W64 W8 -> Ind W64 W8
+bytePtr = id
