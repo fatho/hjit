@@ -19,3 +19,6 @@ cabal.sandbox.config
 cabal.project.local
 .HTF/
 .ghc.environment.*
+
+# using hpack
+hjit.cabal

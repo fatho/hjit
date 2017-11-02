@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE FunctionalDependencies     #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE KindSignatures             #-}
@@ -11,20 +12,24 @@
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
-module HJit.CodeGen.AMD64
-  (
-  -- * Re-exports
-    module HJit.CodeGen.AMD64.ControlFlow
-  , module HJit.CodeGen.AMD64.Moves
-  , module HJit.CodeGen.AMD64.Registers
-  , module HJit.CodeGen.AMD64.Types
-  , assemble
-  , Label (..)
-  , here
-  ) where
+module HJit.CodeGen.AMD64 where
 
-import           HJit.CodeGen.AMD64.ControlFlow
-import           HJit.CodeGen.AMD64.Moves
-import           HJit.CodeGen.AMD64.Registers
-import           HJit.CodeGen.AMD64.Types
+import           Control.Lens
+import           Control.Monad.Except
+import           Control.Monad.State
+import           Data.HashMap.Strict    (HashMap)
+import qualified Data.HashMap.Strict    as HashMap
+import           Data.Int
+import           Data.Sequence          (Seq)
+import qualified Data.Sequence          as Seq
+import           Data.Text              (Text)
+import           Data.Word
+
 import           HJit.CodeGen.Assembler
+
+import           HJit.CodeGen.AMD64.Instructions
+
+type Amd64 s = Asm s Instr
+
+data Amd64Error = CannotHaveREXPrefix
+

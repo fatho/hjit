@@ -17,11 +17,6 @@ library:
   exposed-modules:
   - Lib
   - HJit.CodeGen.AMD64
-  - HJit.CodeGen.AMD64.ControlFlow
-  - HJit.CodeGen.AMD64.Moves
-  - HJit.CodeGen.AMD64.Prefixes
-  - HJit.CodeGen.AMD64.Primitives
-  - HJit.CodeGen.AMD64.Types
   - HJit.CodeGen.Assembler
   - HJit.CodeGen.Assembler.Internal
   - HJit.Memory
@@ -36,10 +31,13 @@ library:
   dependencies:
   - base >=4.7 && <5
   - bytestring
-  - text
-  - mtl
-  - transformers
+  - containers
+  - hashable
   - lens
+  - mtl
+  - text
+  - transformers
+  - unordered-containers
 
 executables:
   hjit-exe:

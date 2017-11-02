@@ -1,15 +1,38 @@
-{-# LANGUAGE DataKinds           #-}
-{-# LANGUAGE GADTs               #-}
-{-# LANGUAGE KindSignatures      #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE DataKinds      #-}
+{-# LANGUAGE KindSignatures #-}
+{-| Defines the registers available on the AMD64 platform. -}
 module HJit.CodeGen.AMD64.Registers where
 
 import           Data.Maybe               (fromJust)
+import           Data.Word
 
 import           HJit.CodeGen.AMD64.Types
 
--- * 64 Bit general purpose registers
+-- * General purpose registers
+
+-- | A general purpose register annotated with its size
+data Reg (s :: WordSize) = Reg
+  { regIndex :: !Word8
+    -- ^ The internal index of that register
+  , regHigh8 :: !Bool
+    -- ^ Determines whether this register accesses the high 8 bit of the lower 16 bit of the (AH, CH, DH, BH).
+  }
+
+-- | Unsafely assign a new size to the register type.
+unsafeCastReg :: Reg s1 -> Reg s2
+unsafeCastReg (Reg idx high8) = Reg idx high8
+
+-- | Return the corresponding register of a different size. For truncating
+-- casts, this always returns the register corresponding to lowest n bits of the
+-- 64 bit variant.
+castRegSize :: Reg src -> Reg dst
+castRegSize (Reg reg _) = Reg reg False
+
+-- | Return the register corresponding to the high 8 bits of the lower word, if accessible.
+castRegSize8H :: Reg src -> Maybe (Reg W8)
+castRegSize8H (Reg reg _)
+  | reg < 4 = Just (Reg (reg + 4) True)
+  | otherwise = Nothing
 
 rax :: Reg W64
 rax = Reg 0x00 False
@@ -60,18 +83,6 @@ r15 :: Reg W64
 r15 = Reg 0x0F False
 
 
--- | Return the corresponding register of a different size. For truncating
--- casts, this always returns the register corresponding to lowest n bits of the
--- 64 bit variant.
-castRegSize :: Reg src -> Reg dst
-castRegSize (Reg reg _) = Reg reg False
-
--- | Return the register corresponding to the high 8 bits of the lower word, if accessible.
-castRegSize8H :: Reg src -> Maybe (Reg W8)
-castRegSize8H (Reg reg _)
-  | reg < 4 = Just (Reg (reg + 4) True)
-  | otherwise = Nothing
-
 -- * 32 bit general purpose registers
 
 eax :: Reg W32
@@ -108,8 +119,17 @@ r8l = castRegSize r8
 
 -- TODO: remaining 8 bit registers
 
-
 -- * Special registers
+
+-- | Instruction pointer register
+data IP (s :: WordSize) = IP
+
+-- | Control register
+newtype CR = CR Word8
+
+-- | Debug register
+newtype DR = DR Word8
+-- * 64 Bit general purpose registers
 
 rip :: IP W64
 rip = IP
@@ -122,3 +142,5 @@ cr0 = CR 0
 
 dr0 :: DR
 dr0 = DR 0
+
+-- TODO: remaining special registers
